@@ -1,0 +1,27 @@
+import { api } from "./client";
+import { saveTokens } from "../storage/tokens";
+
+export type Rol = "admin" | "aprendiz" | "guarda";
+
+export type Usuario = {
+  id: number;
+  username: string;
+  rol: Rol;
+  first_name?: string;
+  last_name?: string;
+  documento?: string | null;
+  sede_principal?: string | null;
+  programa_formacion?: string | null;
+};
+
+export async function login(username: string, password: string) {
+  const r = await api.post("/api/token/", { username, password });
+  await saveTokens(r.data.access, r.data.refresh);
+  return r.data as { access: string; refresh: string };
+}
+
+export async function me() {
+  const r = await api.get("/api/me/");
+  // r.data = { permitido, motivo, usuario }
+  return r.data as { permitido: boolean; motivo: string | null; usuario: Usuario };
+}
