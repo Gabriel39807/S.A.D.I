@@ -69,6 +69,8 @@ class MeView(APIView):
 
 
 
+
+
 # =========================
 # AUTH: PASSWORD RESET (OTP)
 # =========================
@@ -234,6 +236,7 @@ class UsuarioViewSet(viewsets.ModelViewSet):
             qs = qs.filter(sede_principal=sede_principal)
 
         return qs
+
 
 
 
@@ -511,8 +514,15 @@ class AccesoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         rol = getattr(user, "rol", None)
 
-        if rol in ["admin", "guarda"]:
+        # ✅ Admin: ve todo
+        if rol == "admin":
             qs = Acceso.objects.all().order_by("-fecha")
+
+        # ✅ Guarda: SOLO accesos de sus turnos
+        elif rol == "guarda":
+            qs = Acceso.objects.filter(turno__guarda=user).order_by("-fecha")
+
+        # ✅ Aprendiz u otros: solo los propios
         else:
             qs = Acceso.objects.filter(usuario=user).order_by("-fecha")
 
@@ -599,6 +609,7 @@ class AccesoViewSet(viewsets.ModelViewSet):
             return Response({"permitido": False, "motivo": f"Doble {tipo}."}, status=status.HTTP_400_BAD_REQUEST)
 
         equipos_a_setear = []
+
         if tipo == Acceso.Tipo.SALIDA:
             if not ultimo or ultimo.tipo != Acceso.Tipo.INGRESO:
                 return Response(
@@ -612,6 +623,21 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
             equipos_ingreso_ids = list(ultimo.equipos.values_list("id", flat=True))
 
+            # ✅ Regla negocio:
+            # - Si entró con equipos, la salida DEBE incluirlos y coincidir exactamente.
+            # - Si entró sin equipos, la salida NO puede incluir equipos.
+            if equipos_ingreso_ids and not equipos_enviados:
+                return Response(
+                    {"permitido": False, "motivo": "Salida inválida: debes seleccionar los mismos equipos del último ingreso."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if (not equipos_ingreso_ids) and equipos_enviados:
+                return Response(
+                    {"permitido": False, "motivo": "Salida inválida: el último ingreso no tenía equipos."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if equipos_enviados:
                 enviados_ids = sorted([e.id for e in equipos_enviados])
                 if sorted(equipos_ingreso_ids) != enviados_ids:
@@ -620,8 +646,6 @@ class AccesoViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 equipos_a_setear = equipos_enviados
-            else:
-                equipos_a_setear = list(Equipo.objects.filter(id__in=equipos_ingreso_ids))
 
         acceso = serializer.save(registrado_por=request_user, turno=turno, sede=sede)
 
@@ -641,7 +665,10 @@ class AccesoViewSet(viewsets.ModelViewSet):
                     raise ValidationError({"equipos": "Uno de los equipos no está aprobado."})
             acceso.equipos.set(equipos_a_setear)
 
-        return Response({"permitido": True, "motivo": None, "acceso": AccesoSerializer(acceso).data}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"permitido": True, "motivo": None, "acceso": AccesoSerializer(acceso).data},
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=["post"], url_path="validar_documento")
     def validar_documento(self, request):
@@ -651,8 +678,10 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
         turno = obtener_turno_activo(request.user)
         if not turno:
-            return Response({"permitido": False, "motivo": "Debes iniciar turno para validar y registrar accesos."},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"permitido": False, "motivo": "Debes iniciar turno para validar y registrar accesos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         aprendiz = Usuario.objects.filter(documento=documento).first()
         if not aprendiz:
@@ -693,8 +722,10 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
         turno = obtener_turno_activo(request.user)
         if not turno:
-            return Response({"permitido": False, "motivo": "Debes iniciar turno antes de registrar accesos."},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"permitido": False, "motivo": "Debes iniciar turno antes de registrar accesos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         aprendiz = Usuario.objects.filter(documento=documento).first()
         if not aprendiz:
@@ -715,6 +746,7 @@ class AccesoViewSet(viewsets.ModelViewSet):
             return Response({"permitido": False, "motivo": f"Doble {tipo}."}, status=status.HTTP_400_BAD_REQUEST)
 
         equipos_a_setear = []
+
         if tipo == Acceso.Tipo.SALIDA:
             if not ultimo or ultimo.tipo != Acceso.Tipo.INGRESO:
                 return Response(
@@ -724,6 +756,18 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
             equipos_ingreso_ids = list(ultimo.equipos.values_list("id", flat=True))
 
+            if equipos_ingreso_ids and not equipos_ids:
+                return Response(
+                    {"permitido": False, "motivo": "Salida inválida: debes seleccionar los mismos equipos del último ingreso."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if (not equipos_ingreso_ids) and equipos_ids:
+                return Response(
+                    {"permitido": False, "motivo": "Salida inválida: el último ingreso no tenía equipos."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             if equipos_ids:
                 if sorted(equipos_ingreso_ids) != sorted(equipos_ids):
                     return Response(
@@ -731,8 +775,6 @@ class AccesoViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 equipos_a_setear = list(Equipo.objects.filter(id__in=equipos_ids))
-            else:
-                equipos_a_setear = list(Equipo.objects.filter(id__in=equipos_ingreso_ids))
 
         acceso = Acceso.objects.create(
             usuario=aprendiz,
@@ -786,7 +828,6 @@ class AccesoViewSet(viewsets.ModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
-    
     @action(detail=False, methods=["get"], url_path="stats")
     def stats(self, request):
         user = request.user
