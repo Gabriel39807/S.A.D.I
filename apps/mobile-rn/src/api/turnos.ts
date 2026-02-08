@@ -28,3 +28,13 @@ export async function turnoActual() {
   // Puede devolver {activo:false} o el TurnoSerializer
   return r.data as ({ activo: false } | Turno);
 }
+
+export async function resumenTurno(id: number) {
+  const r = await api.get(`/api/turnos/${id}/resumen/`);
+  return r.data as {
+    permitido: boolean;
+    motivo: string | null;
+    turno: Turno;
+    resumen: { ingresos: number; salidas: number; total: number };
+  };
+}

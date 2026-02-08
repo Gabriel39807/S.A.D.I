@@ -25,3 +25,18 @@ export async function me() {
   // r.data = { permitido, motivo, usuario }
   return r.data as { permitido: boolean; motivo: string | null; usuario: Usuario };
 }
+
+export async function passwordResetRequest(email: string) {
+  const r = await api.post("/api/auth/password-reset/request/", { email });
+  return r.data as { permitido: boolean; motivo: string | null; mensaje?: string };
+}
+
+export async function passwordResetVerify(email: string, otp: string) {
+  const r = await api.post("/api/auth/password-reset/verify/", { email, otp });
+  return r.data as { permitido: boolean; motivo: string | null };
+}
+
+export async function passwordResetConfirm(email: string, otp: string, new_password: string) {
+  const r = await api.post("/api/auth/password-reset/confirm/", { email, otp, new_password });
+  return r.data as { permitido: boolean; motivo: string | null };
+}

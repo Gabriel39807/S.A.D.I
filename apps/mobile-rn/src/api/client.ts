@@ -1,62 +1,62 @@
 import axios from "axios";
 import { API_URL } from "../config";
-import { clearTokens, getAccessToken, getRefreshToken, saveTokens } from "../storage/tokens";
+import { getAccessToken, clearTokens } from "../storage/tokens";
+
+export class UiError extends Error {
+  code?: string;
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "UiError";
+    this.code = code;
+  }
+}
 
 export const api = axios.create({
   baseURL: API_URL,
+  timeout: 15000, // evita “se demora resto de tiempo”
 });
 
-let refreshPromise: Promise<string | null> | null = null;
-
+// Attach token
 api.interceptors.request.use(async (config) => {
   const token = await getAccessToken();
-  if (token) {
-    config.headers = config.headers ?? {};
-    (config.headers as any).Authorization = `Bearer ${token}`;
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
+// UI-friendly errors
 api.interceptors.response.use(
   (r) => r,
-  async (err) => {
-    const original = err?.config;
-
-    const is401 = err?.response?.status === 401;
-    const isTokenCall = typeof original?.url === "string" && original.url.includes("/api/token");
-
-    if (!is401 || isTokenCall || original?._retry) {
-      return Promise.reject(err);
+  async (error) => {
+    // Sin respuesta => red / timeout / dns
+    if (!error.response) {
+      if (error.code === "ECONNABORTED") {
+        throw new UiError("El servidor está tardando demasiado. Intenta de nuevo.", "TIMEOUT");
+      }
+      throw new UiError("No se pudo conectar al servidor. Revisa tu Wi-Fi y que el servidor esté encendido.", "NETWORK");
     }
 
-    original._retry = true;
+    const status = error.response.status;
+    const data = error.response.data;
 
-    if (!refreshPromise) {
-      refreshPromise = (async () => {
-        const refresh = await getRefreshToken();
-        if (!refresh) return null;
+    // Mensajes del backend (si existen)
+    const motivo = typeof data?.motivo === "string" ? data.motivo : null;
 
-        try {
-          const r = await axios.post(`${API_URL}/api/token/refresh/`, { refresh });
-          const access = r.data?.access;
-          if (!access) return null;
-
-          await saveTokens(access, refresh);
-          return access;
-        } catch {
-          await clearTokens();
-          return null;
-        } finally {
-          refreshPromise = null;
-        }
-      })();
+    if (status === 401) {
+      // Caso login: credenciales
+      if (error.config?.url?.includes("/api/token/")) {
+        throw new UiError("Usuario o contraseña incorrectos.", "BAD_CREDENTIALS");
+      }
+      // Caso token vencido
+      await clearTokens();
+      throw new UiError("Tu sesión expiró. Inicia sesión nuevamente.", "SESSION_EXPIRED");
     }
 
-    const newAccess = await refreshPromise;
-    if (!newAccess) return Promise.reject(err);
+    if (status === 403) throw new UiError(motivo ?? "No tienes permisos para hacer esto.", "FORBIDDEN");
+    if (status === 404) throw new UiError(motivo ?? "No encontramos lo que buscas.", "NOT_FOUND");
+    if (status >= 500) throw new UiError("Error del servidor. Intenta más tarde.", "SERVER_ERROR");
 
-    original.headers = original.headers ?? {};
-    original.headers.Authorization = `Bearer ${newAccess}`;
-    return api(original);
+    // 400/422 validación
+    if (motivo) throw new UiError(motivo, "VALIDATION");
+    throw new UiError("Ocurrió un error. Verifica los datos e intenta nuevamente.", "GENERIC");
   }
 );

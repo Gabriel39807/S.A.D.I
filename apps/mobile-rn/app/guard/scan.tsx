@@ -116,6 +116,38 @@ export default function ScanScreen() {
           borderColor: "#eee",
         }}
       >
+              {/* Marco visual */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: 240,
+            height: 240,
+            marginLeft: -120,
+            marginTop: -120,
+            borderRadius: 24,
+            borderWidth: 4,
+            borderColor: "rgba(22,163,74,0.95)",
+          }}
+        />
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            width: 220,
+            height: 220,
+            marginLeft: -110,
+            marginTop: -110,
+            borderRadius: 20,
+            borderWidth: 2,
+            borderColor: "rgba(255,255,255,0.85)",
+          }}
+        />
+
         <CameraView
           style={{ flex: 1 }}
           barcodeScannerSettings={{ barcodeTypes: ["qr"] }}

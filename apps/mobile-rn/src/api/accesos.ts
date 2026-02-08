@@ -36,3 +36,14 @@ export async function registrarPorDocumento(params: {
 
 // cache simple para pasar data entre pantallas sin state global
 export const __cache = new Map<string, any>();
+
+
+export async function stats() {
+  const r = await api.get("/api/accesos/stats/");
+  return r.data as {
+    permitido: boolean;
+    motivo: string | null;
+    turno?: { id: number; sede: string; jornada: string };
+    stats?: { ingresos: number; salidas: number; total: number };
+  };
+}
