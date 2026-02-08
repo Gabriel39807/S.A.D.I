@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from .models import Usuario, Acceso, Equipo, Turno
-
+from .models import Notificacion
 
 # =========================
 # USUARIOS
@@ -170,4 +170,44 @@ class RegistrarAccesoDocumentoSerializer(serializers.Serializer):
     equipos = serializers.ListField(child=serializers.IntegerField(min_value=1), required=False, allow_empty=True)
 
     def validate_documento(self, value):
+        return value.strip()
+
+
+# --- NUEVO: Notificaciones + Password Reset ---
+
+
+class NotificacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notificacion
+        fields = ["id", "tipo", "titulo", "mensaje", "data", "created_at", "read_at", "rol_objetivo", "user"]
+        read_only_fields = ["created_at", "read_at"]
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+
+class PasswordResetVerifySerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(min_length=6, max_length=6)
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_otp(self, value):
+        return value.strip()
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.CharField(min_length=6, max_length=6)
+    new_password = serializers.CharField(min_length=4, max_length=128)
+
+    def validate_email(self, value):
+        return value.strip().lower()
+
+    def validate_otp(self, value):
         return value.strip()

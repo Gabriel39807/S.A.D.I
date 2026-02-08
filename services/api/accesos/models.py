@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.conf import settings
 
 
 class Usuario(AbstractUser):
@@ -103,3 +104,77 @@ class Acceso(models.Model):
 
     def __str__(self):
         return f"{self.usuario.username} - {self.tipo} - {self.fecha}"
+
+
+
+class Notificacion(models.Model):
+    class Tipo(models.TextChoices):
+        INFO = "INFO", "Info"
+        WARNING = "WARNING", "Warning"
+        URGENT = "URGENT", "Urgent"
+
+    # Puede ser para un usuario específico (user) o para un rol (rol_objetivo)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="notificaciones",
+        null=True,
+        blank=True,
+    )
+
+    rol_objetivo = models.CharField(
+        max_length=20,
+        choices=Usuario.Rol.choices,
+        null=True,
+        blank=True,
+        help_text="Si es null, aplica a todos los roles (si user también es null, es global).",
+    )
+
+    tipo = models.CharField(max_length=20, choices=Tipo.choices, default=Tipo.INFO)
+    titulo = models.CharField(max_length=120)
+    mensaje = models.TextField()
+    data = models.JSONField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        target = self.user_id if self.user_id else (self.rol_objetivo or "ALL")
+        return f"[{self.tipo}] {self.titulo} -> {target}"
+
+
+class PasswordResetOTP(models.Model):
+    """
+    OTP de 6 dígitos para recuperación de contraseña.
+    Guardamos hash (no OTP plano), expiración, intentos y uso.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="password_reset_otps",
+    )
+
+    salt = models.CharField(max_length=64)
+    code_hash = models.CharField(max_length=128)
+
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveIntegerField(default=0)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "expires_at"]),
+        ]
+        ordering = ["-created_at"]
+
+    @property
+    def is_used(self) -> bool:
+        return self.used_at is not None
+
+    def __str__(self):
+        return f"OTP(user={self.user_id}, exp={self.expires_at}, used={bool(self.used_at)})"

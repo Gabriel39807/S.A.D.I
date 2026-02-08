@@ -1,13 +1,17 @@
+import hashlib
+import secrets
+from datetime import timedelta
 from django.utils import timezone
 from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
+from django.conf import settings
+from django.core.mail import send_mail
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 from rest_framework.views import APIView
-
-from .models import Usuario, Acceso, Equipo, Turno
+from .models import Usuario, Acceso, Equipo, Turno, Notificacion, PasswordResetOTP
 from .serializers import (
     UsuarioSerializer,
     AccesoSerializer,
@@ -17,6 +21,10 @@ from .serializers import (
     TurnoIniciarSerializer,
     ValidarDocumentoSerializer,
     RegistrarAccesoDocumentoSerializer,
+    NotificacionSerializer,
+    PasswordResetRequestSerializer,
+    PasswordResetVerifySerializer,
+    PasswordResetConfirmSerializer,
 )
 from .permissions import IsAdmin, IsGuarda, IsAprendiz
 
@@ -27,6 +35,19 @@ def obtener_turno_activo(user):
         .order_by("-inicio")
         .first()
     )
+
+# --- Helpers OTP ---
+OTP_TTL_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
+
+def _hash_code(salt: str, code: str) -> str:
+    raw = f"{salt}:{code}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+def _generate_otp_code() -> str:
+    # 6 dígitos
+    return f"{secrets.randbelow(10**6):06d}"
+
 
 
 # =========================
@@ -46,6 +67,138 @@ class MeView(APIView):
         )
 
 
+
+
+# =========================
+# AUTH: PASSWORD RESET (OTP)
+# =========================
+class PasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            s = PasswordResetRequestSerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = s.validated_data["email"]
+        user = Usuario.objects.filter(email__iexact=email).first()
+
+        # Respuesta neutral para no filtrar si existe el email
+        if user:
+            code = _generate_otp_code()
+            salt = secrets.token_hex(16)
+            code_hash = _hash_code(salt, code)
+            expires_at = timezone.now() + timedelta(minutes=OTP_TTL_MINUTES)
+
+            PasswordResetOTP.objects.create(
+                user=user,
+                salt=salt,
+                code_hash=code_hash,
+                expires_at=expires_at,
+            )
+
+            # En desarrollo, si usas EMAIL_BACKEND=console, el OTP sale en consola
+            send_mail(
+                subject="SADI - Código de recuperación",
+                message=f"Tu código OTP es: {code}\nVence en {OTP_TTL_MINUTES} minutos.",
+                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@sadi.local"),
+                recipient_list=[user.email],
+                fail_silently=True,
+            )
+
+        return Response(
+            {"permitido": True, "motivo": None, "mensaje": "Si el correo existe, enviamos un código OTP."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class PasswordResetVerifyView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            s = PasswordResetVerifySerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = s.validated_data["email"]
+        otp = s.validated_data["otp"]
+
+        user = Usuario.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response({"permitido": False, "motivo": "OTP inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        otp_obj = (
+            PasswordResetOTP.objects.filter(user=user, used_at__isnull=True)
+            .order_by("-created_at")
+            .first()
+        )
+
+        if not otp_obj:
+            return Response({"permitido": False, "motivo": "No hay OTP activo."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if timezone.now() > otp_obj.expires_at:
+            return Response({"permitido": False, "motivo": "OTP expirado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if otp_obj.attempts >= OTP_MAX_ATTEMPTS:
+            return Response({"permitido": False, "motivo": "Demasiados intentos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if _hash_code(otp_obj.salt, otp) != otp_obj.code_hash:
+            otp_obj.attempts += 1
+            otp_obj.save(update_fields=["attempts"])
+            return Response({"permitido": False, "motivo": "OTP inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({"permitido": True, "motivo": None}, status=status.HTTP_200_OK)
+
+
+class PasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            s = PasswordResetConfirmSerializer(data=request.data)
+            s.is_valid(raise_exception=True)
+        except ValidationError as e:
+            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+        email = s.validated_data["email"]
+        otp = s.validated_data["otp"]
+        new_password = s.validated_data["new_password"]
+
+        user = Usuario.objects.filter(email__iexact=email).first()
+        if not user:
+            return Response({"permitido": False, "motivo": "OTP inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        otp_obj = (
+            PasswordResetOTP.objects.filter(user=user, used_at__isnull=True)
+            .order_by("-created_at")
+            .first()
+        )
+
+        if not otp_obj:
+            return Response({"permitido": False, "motivo": "No hay OTP activo."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if timezone.now() > otp_obj.expires_at:
+            return Response({"permitido": False, "motivo": "OTP expirado."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if otp_obj.attempts >= OTP_MAX_ATTEMPTS:
+            return Response({"permitido": False, "motivo": "Demasiados intentos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if _hash_code(otp_obj.salt, otp) != otp_obj.code_hash:
+            otp_obj.attempts += 1
+            otp_obj.save(update_fields=["attempts"])
+            return Response({"permitido": False, "motivo": "OTP inválido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new_password)
+        user.save(update_fields=["password"])
+
+        otp_obj.used_at = timezone.now()
+        otp_obj.save(update_fields=["used_at"])
+
+        return Response({"permitido": True, "motivo": None}, status=status.HTTP_200_OK)
 # =========================
 # USUARIOS (ADMIN)
 # =========================
@@ -84,6 +237,49 @@ class UsuarioViewSet(viewsets.ModelViewSet):
 
 
 
+
+
+# =========================
+# NOTIFICACIONES
+# =========================
+class NotificacionViewSet(viewsets.ModelViewSet):
+    serializer_class = NotificacionSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Notificacion.objects.all()
+
+    def get_queryset(self):
+        user = self.request.user
+        rol = getattr(user, "rol", None)
+
+        qs_user = Notificacion.objects.filter(user=user)
+        qs_rol = Notificacion.objects.filter(user__isnull=True, rol_objetivo=rol)
+        qs_global = Notificacion.objects.filter(user__isnull=True, rol_objetivo__isnull=True)
+
+        return (qs_user | qs_rol | qs_global).distinct().order_by("-created_at")
+
+    def get_permissions(self):
+        # CRUD solo admin (opcional). Lectura: cualquier autenticado.
+        if self.action in ["create", "update", "partial_update", "destroy"]:
+            return [IsAuthenticated(), IsAdmin()]
+        return [IsAuthenticated()]
+
+    @action(detail=True, methods=["patch"], url_path="leer")
+    def leer(self, request, pk=None):
+        obj = self.get_object()
+
+        # si NO es admin, solo puede marcar como leída la suya o una global
+        if getattr(request.user, "rol", None) != "admin":
+            if obj.user_id not in [None, request.user.id]:
+                return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
+
+        if obj.read_at is None:
+            obj.read_at = timezone.now()
+            obj.save(update_fields=["read_at"])
+
+        return Response(
+            {"permitido": True, "motivo": None, "notificacion": NotificacionSerializer(obj).data},
+            status=status.HTTP_200_OK,
+        )
 # =========================
 # EQUIPOS
 # =========================
@@ -277,6 +473,30 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
         turno.save(update_fields=["activo", "fin"])
 
         return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="resumen")
+    def resumen(self, request, pk=None):
+        turno = self.get_object()
+        user = request.user
+        rol = getattr(user, "rol", None)
+
+        # Guarda solo puede ver sus turnos, admin cualquiera
+        if rol == "guarda" and turno.guarda_id != user.id:
+            return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
+
+        qs = Acceso.objects.filter(turno=turno)
+        ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
+        salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
+
+        return Response(
+            {
+                "permitido": True,
+                "motivo": None,
+                "turno": TurnoSerializer(turno).data,
+                "resumen": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas},
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # =========================
@@ -565,6 +785,45 @@ class AccesoViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED,
         )
+
+    
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        user = request.user
+        rol = getattr(user, "rol", None)
+
+        if rol == "guarda":
+            turno = obtener_turno_activo(user)
+            if not turno:
+                return Response(
+                    {"permitido": False, "motivo": "No tienes turno activo.", "stats": None},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            qs = Acceso.objects.filter(turno=turno)
+            ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
+            salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
+
+            return Response(
+                {
+                    "permitido": True,
+                    "motivo": None,
+                    "turno": {"id": turno.id, "sede": turno.sede, "jornada": turno.jornada},
+                    "stats": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas},
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        if rol == "admin":
+            qs = self.get_queryset()
+            ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
+            salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
+            return Response(
+                {"permitido": True, "motivo": None, "stats": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas}},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
 
     @action(detail=False, methods=["get"], url_path="mis_accesos")
     def mis_accesos(self, request):
