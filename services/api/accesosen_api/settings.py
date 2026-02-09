@@ -11,6 +11,13 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 from pathlib import Path
 from dotenv import load_dotenv
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
 load_dotenv()
 
@@ -86,6 +93,9 @@ TEMPLATES = [
     },
 ]
 
+TEMPLATES[0]["DIRS"] = [BASE_DIR / "accesos" / "templates"]
+
+
 WSGI_APPLICATION = 'accesosen_api.wsgi.application'
 
 
@@ -160,9 +170,19 @@ REST_FRAMEWORK = {
     # ✅ PAGINACIÓN GLOBAL
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,  # puedes cambiarlo a 25/50
+    "EXCEPTION_HANDLER": "accesos.exceptions.ui_exception_handler",
 }
 
+# =========================
+# EMAIL (RECUPERAR CONTRASEÑA)
+# =========================
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 
-# --- Email (DEV) ---
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-DEFAULT_FROM_EMAIL = "no-reply@sadi.local"
+EMAIL_HOST = os.getenv("DJANGO_EMAIL_HOST", "smtp.gmail.com")
+EMAIL_PORT = int(os.getenv("DJANGO_EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.getenv("DJANGO_EMAIL_USE_TLS", "true").lower() == "true"
+
+EMAIL_HOST_USER = os.getenv("DJANGO_EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("DJANGO_EMAIL_HOST_PASSWORD", "")
+
+DEFAULT_FROM_EMAIL = os.getenv("DJANGO_DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@sadi.local")

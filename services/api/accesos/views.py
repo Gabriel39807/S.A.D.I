@@ -1,34 +1,39 @@
 import hashlib
 import secrets
 from datetime import timedelta
-from django.utils import timezone
-from django.db.models import Q
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
+
 from django.conf import settings
-from django.core.mail import send_mail
-from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.response import Response
+from django.core.mail import EmailMultiAlternatives
+from django.db.models import Q
+from django.template.loader import render_to_string
+from django.utils import timezone
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.views import APIView
-from .models import Usuario, Acceso, Equipo, Turno, Notificacion, PasswordResetOTP
+
+from .models import Acceso, Equipo, Notificacion, PasswordResetOTP, Turno, Usuario
+from .permissions import IsAdmin, IsAprendiz, IsGuarda
 from .serializers import (
-    UsuarioSerializer,
     AccesoSerializer,
-    EquipoSerializer,
     EquipoRevisionSerializer,
-    TurnoSerializer,
-    TurnoIniciarSerializer,
-    ValidarDocumentoSerializer,
-    RegistrarAccesoDocumentoSerializer,
+    EquipoSerializer,
     NotificacionSerializer,
+    PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PasswordResetVerifySerializer,
-    PasswordResetConfirmSerializer,
+    RegistrarAccesoDocumentoSerializer,
+    TurnoIniciarSerializer,
+    TurnoSerializer,
+    UsuarioSerializer,
+    ValidarDocumentoSerializer,
 )
-from .permissions import IsAdmin, IsGuarda, IsAprendiz
 
-
+# =========================
+# Helpers
+# =========================
 def obtener_turno_activo(user):
     return (
         Turno.objects.filter(guarda=user, activo=True, fin__isnull=True)
@@ -36,18 +41,51 @@ def obtener_turno_activo(user):
         .first()
     )
 
+
 # --- Helpers OTP ---
 OTP_TTL_MINUTES = 10
 OTP_MAX_ATTEMPTS = 5
+
 
 def _hash_code(salt: str, code: str) -> str:
     raw = f"{salt}:{code}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
+
 def _generate_otp_code() -> str:
     # 6 dígitos
     return f"{secrets.randbelow(10**6):06d}"
 
+
+def _send_password_reset_email(to_email: str, code: str):
+    """
+    Envía OTP por correo. Si no hay template HTML, cae a texto.
+    """
+    subject = "SADI — Código de recuperación"
+    context = {"otp": code, "ttl_minutes": OTP_TTL_MINUTES, "email": to_email}
+
+    text_body = (
+        f"Tu código de recuperación SADI es: {code}\n\n"
+        f"Este código vence en {OTP_TTL_MINUTES} minutos.\n"
+        "Si no solicitaste este cambio, ignora este mensaje."
+    )
+
+    html_body = None
+    try:
+        html_body = render_to_string("emails/password_reset_otp.html", context)
+    except Exception:
+        html_body = None
+
+    msg = EmailMultiAlternatives(
+        subject=subject,
+        body=text_body,
+        from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@sadi.local"),
+        to=[to_email],
+    )
+    if html_body:
+        msg.attach_alternative(html_body, "text/html")
+    # Si tu SMTP no está configurado, esto puede fallar. En dev usa console backend.
+    msg.send(fail_silently=False)
 
 
 # =========================
@@ -58,17 +96,9 @@ class MeView(APIView):
 
     def get(self, request):
         return Response(
-            {
-                "permitido": True,
-                "motivo": None,
-                "usuario": UsuarioSerializer(request.user).data,
-            },
+            {"permitido": True, "motivo": None, "usuario": UsuarioSerializer(request.user).data},
             status=status.HTTP_200_OK,
         )
-
-
-
-
 
 
 # =========================
@@ -78,11 +108,14 @@ class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        s = PasswordResetRequestSerializer(data=request.data)
         try:
-            s = PasswordResetRequestSerializer(data=request.data)
             s.is_valid(raise_exception=True)
         except ValidationError as e:
-            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         email = s.validated_data["email"]
         user = Usuario.objects.filter(email__iexact=email).first()
@@ -101,14 +134,7 @@ class PasswordResetRequestView(APIView):
                 expires_at=expires_at,
             )
 
-            # En desarrollo, si usas EMAIL_BACKEND=console, el OTP sale en consola
-            send_mail(
-                subject="SADI - Código de recuperación",
-                message=f"Tu código OTP es: {code}\nVence en {OTP_TTL_MINUTES} minutos.",
-                from_email=getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@sadi.local"),
-                recipient_list=[user.email],
-                fail_silently=True,
-            )
+            _send_password_reset_email(user.email, code)
 
         return Response(
             {"permitido": True, "motivo": None, "mensaje": "Si el correo existe, enviamos un código OTP."},
@@ -120,11 +146,14 @@ class PasswordResetVerifyView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        s = PasswordResetVerifySerializer(data=request.data)
         try:
-            s = PasswordResetVerifySerializer(data=request.data)
             s.is_valid(raise_exception=True)
         except ValidationError as e:
-            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         email = s.validated_data["email"]
         otp = s.validated_data["otp"]
@@ -138,7 +167,6 @@ class PasswordResetVerifyView(APIView):
             .order_by("-created_at")
             .first()
         )
-
         if not otp_obj:
             return Response({"permitido": False, "motivo": "No hay OTP activo."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -160,11 +188,14 @@ class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
+        s = PasswordResetConfirmSerializer(data=request.data)
         try:
-            s = PasswordResetConfirmSerializer(data=request.data)
             s.is_valid(raise_exception=True)
         except ValidationError as e:
-            return Response({"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"permitido": False, "motivo": "Datos inválidos.", "errores": e.detail},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         email = s.validated_data["email"]
         otp = s.validated_data["otp"]
@@ -179,7 +210,6 @@ class PasswordResetConfirmView(APIView):
             .order_by("-created_at")
             .first()
         )
-
         if not otp_obj:
             return Response({"permitido": False, "motivo": "No hay OTP activo."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -201,6 +231,8 @@ class PasswordResetConfirmView(APIView):
         otp_obj.save(update_fields=["used_at"])
 
         return Response({"permitido": True, "motivo": None}, status=status.HTTP_200_OK)
+
+
 # =========================
 # USUARIOS (ADMIN)
 # =========================
@@ -238,10 +270,6 @@ class UsuarioViewSet(viewsets.ModelViewSet):
         return qs
 
 
-
-
-
-
 # =========================
 # NOTIFICACIONES
 # =========================
@@ -261,7 +289,6 @@ class NotificacionViewSet(viewsets.ModelViewSet):
         return (qs_user | qs_rol | qs_global).distinct().order_by("-created_at")
 
     def get_permissions(self):
-        # CRUD solo admin (opcional). Lectura: cualquier autenticado.
         if self.action in ["create", "update", "partial_update", "destroy"]:
             return [IsAuthenticated(), IsAdmin()]
         return [IsAuthenticated()]
@@ -270,10 +297,12 @@ class NotificacionViewSet(viewsets.ModelViewSet):
     def leer(self, request, pk=None):
         obj = self.get_object()
 
-        # si NO es admin, solo puede marcar como leída la suya o una global
         if getattr(request.user, "rol", None) != "admin":
             if obj.user_id not in [None, request.user.id]:
-                return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
+                return Response(
+                    {"permitido": False, "motivo": "No autorizado."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
 
         if obj.read_at is None:
             obj.read_at = timezone.now()
@@ -283,6 +312,8 @@ class NotificacionViewSet(viewsets.ModelViewSet):
             {"permitido": True, "motivo": None, "notificacion": NotificacionSerializer(obj).data},
             status=status.HTTP_200_OK,
         )
+
+
 # =========================
 # EQUIPOS
 # =========================
@@ -340,9 +371,7 @@ class EquipoViewSet(viewsets.ModelViewSet):
 
         propietario = serializer.validated_data.get("propietario", None)
         if not propietario:
-            raise ValidationError(
-                {"propietario": "Como admin debes enviar el propietario (id del aprendiz)."}
-            )
+            raise ValidationError({"propietario": "Como admin debes enviar el propietario (id del aprendiz)."})
 
         equipo = serializer.save(propietario=propietario)
 
@@ -381,7 +410,6 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
     def get_permissions(self):
         if self.action in ["iniciar", "finalizar", "actual"]:
             return [IsAuthenticated(), IsGuarda()]
-
         if self.action == "finalizar_admin":
             return [IsAuthenticated(), IsAdmin()]
 
@@ -432,10 +460,7 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
             inicio=timezone.now(),
             activo=True,
         )
-        return Response(
-            {"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data},
-            status=status.HTTP_201_CREATED,
-        )
+        return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="finalizar")
     def finalizar(self, request):
@@ -445,13 +470,12 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
                 {"permitido": False, "motivo": "No tienes un turno activo.", "turno": None},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
         turno.activo = False
         turno.fin = timezone.now()
-        turno.save()
-        return Response(
-            {"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data},
-            status=status.HTTP_200_OK,
-        )
+        turno.save(update_fields=["activo", "fin"])
+
+        return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="actual")
     def actual(self, request):
@@ -463,7 +487,6 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="finalizar_admin")
     def finalizar_admin(self, request, pk=None):
         turno = self.get_object()
-
         if not turno.activo:
             return Response(
                 {"permitido": False, "motivo": "El turno ya estaba finalizado.", "turno": TurnoSerializer(turno).data},
@@ -483,7 +506,6 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
         user = request.user
         rol = getattr(user, "rol", None)
 
-        # Guarda solo puede ver sus turnos, admin cualquiera
         if rol == "guarda" and turno.guarda_id != user.id:
             return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
 
@@ -514,17 +536,21 @@ class AccesoViewSet(viewsets.ModelViewSet):
         user = self.request.user
         rol = getattr(user, "rol", None)
 
-        # ✅ Admin: ve todo
+        qs = (
+            Acceso.objects.all()
+            .select_related("turno", "turno__guarda", "usuario", "registrado_por")
+            .prefetch_related("equipos")
+            .order_by("-fecha")
+        )
+
         if rol == "admin":
-            qs = Acceso.objects.all().order_by("-fecha")
-
-        # ✅ Guarda: SOLO accesos de sus turnos
+            pass
         elif rol == "guarda":
-            qs = Acceso.objects.filter(turno__guarda=user).order_by("-fecha")
-
-        # ✅ Aprendiz u otros: solo los propios
+            qs = qs.filter(turno__guarda=user)
+        elif rol == "aprendiz":
+            qs = qs.filter(usuario=user)
         else:
-            qs = Acceso.objects.filter(usuario=user).order_by("-fecha")
+            qs = qs.none()
 
         tipo = (self.request.query_params.get("tipo") or "").strip()
         if tipo:
@@ -552,7 +578,15 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
         q = (self.request.query_params.get("q") or "").strip()
         if q:
-            qs = qs.filter(Q(usuario__documento__icontains=q) | Q(usuario__username__icontains=q))
+            qs = qs.filter(
+                Q(usuario__documento__icontains=q)
+                | Q(usuario__username__icontains=q)
+                | Q(usuario__first_name__icontains=q)
+                | Q(usuario__last_name__icontains=q)
+                | Q(equipos__serial__icontains=q)
+                | Q(equipos__marca__icontains=q)
+                | Q(equipos__modelo__icontains=q)
+            ).distinct()
 
         return qs
 
@@ -563,7 +597,7 @@ class AccesoViewSet(viewsets.ModelViewSet):
                 return [IsAuthenticated(), IsAdmin()]
             return [IsAuthenticated(), IsGuarda()]
 
-        if self.action in ["validar_documento", "registrar_por_documento"]:
+        if self.action in ["validar_documento", "registrar_por_documento", "stats"]:
             return [IsAuthenticated(), IsGuarda()]
 
         if self.action in ["mis_accesos", "estado"]:
@@ -571,15 +605,39 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
         return [IsAuthenticated()]
 
+    def _validar_equipos_ingreso(self, aprendiz: Usuario, equipos: list[Equipo]):
+        # Validación de propiedad y estado
+        for eq in equipos:
+            if eq.propietario_id != aprendiz.id:
+                raise ValidationError({"equipos": "Uno de los equipos no pertenece al aprendiz."})
+            if eq.estado != Equipo.Estado.APROBADO:
+                raise ValidationError({"equipos": "Uno de los equipos no está aprobado."})
+
+        # Regla extra: no permitir ingresar un equipo que ya está "dentro"
+        for eq in equipos:
+            ultimo_eq = Acceso.objects.filter(equipos=eq).order_by("-fecha").first()
+            if ultimo_eq and ultimo_eq.tipo == Acceso.Tipo.INGRESO:
+                raise ValidationError({"equipos": f"El equipo {eq.serial} ya tiene un ingreso activo."})
+
+    def _validar_salida_equipos_vs_ultimo_ingreso(self, ultimo_ingreso: Acceso, equipos_enviados: list[Equipo]):
+        ingreso_ids = sorted(list(ultimo_ingreso.equipos.values_list("id", flat=True)))
+        enviados_ids = sorted([e.id for e in equipos_enviados])
+
+        if ingreso_ids and not equipos_enviados:
+            raise ValidationError({"equipos": "Salida inválida: debes seleccionar los mismos equipos del último ingreso."})
+
+        if (not ingreso_ids) and equipos_enviados:
+            raise ValidationError({"equipos": "Salida inválida: el último ingreso no tenía equipos."})
+
+        if equipos_enviados and ingreso_ids != enviados_ids:
+            raise ValidationError({"equipos": "Los equipos en la salida deben coincidir exactamente con los del último ingreso."})
+
     def create(self, request, *args, **kwargs):
         request_user = request.user
         rol = getattr(request_user, "rol", None)
 
         if rol not in ["admin", "guarda"]:
-            return Response(
-                {"permitido": False, "motivo": "No tienes permisos para registrar accesos."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"permitido": False, "motivo": "No tienes permisos para registrar accesos."}, status=status.HTTP_403_FORBIDDEN)
 
         turno = None
         sede = None
@@ -608,7 +666,9 @@ class AccesoViewSet(viewsets.ModelViewSet):
         if ultimo is not None and ultimo.tipo == tipo:
             return Response({"permitido": False, "motivo": f"Doble {tipo}."}, status=status.HTTP_400_BAD_REQUEST)
 
-        equipos_a_setear = []
+        # Reglas de equipos
+        if tipo == Acceso.Tipo.INGRESO and equipos_enviados:
+            self._validar_equipos_ingreso(aprendiz, list(equipos_enviados))
 
         if tipo == Acceso.Tipo.SALIDA:
             if not ultimo or ultimo.tipo != Acceso.Tipo.INGRESO:
@@ -617,58 +677,19 @@ class AccesoViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # heredar sede/turno del ingreso anterior (admin)
+            # Heredar sede/turno del ingreso (admin o guarda)
             sede = ultimo.sede
             turno = ultimo.turno
 
-            equipos_ingreso_ids = list(ultimo.equipos.values_list("id", flat=True))
-
-            # ✅ Regla negocio:
-            # - Si entró con equipos, la salida DEBE incluirlos y coincidir exactamente.
-            # - Si entró sin equipos, la salida NO puede incluir equipos.
-            if equipos_ingreso_ids and not equipos_enviados:
-                return Response(
-                    {"permitido": False, "motivo": "Salida inválida: debes seleccionar los mismos equipos del último ingreso."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if (not equipos_ingreso_ids) and equipos_enviados:
-                return Response(
-                    {"permitido": False, "motivo": "Salida inválida: el último ingreso no tenía equipos."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if equipos_enviados:
-                enviados_ids = sorted([e.id for e in equipos_enviados])
-                if sorted(equipos_ingreso_ids) != enviados_ids:
-                    return Response(
-                        {"permitido": False, "motivo": "Los equipos en la salida deben coincidir exactamente con los del último ingreso."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                equipos_a_setear = equipos_enviados
+            # Validación estricta de equipos
+            self._validar_salida_equipos_vs_ultimo_ingreso(ultimo, list(equipos_enviados))
 
         acceso = serializer.save(registrado_por=request_user, turno=turno, sede=sede)
 
-        if tipo == Acceso.Tipo.INGRESO and equipos_enviados:
-            for eq in equipos_enviados:
-                if eq.propietario_id != acceso.usuario_id:
-                    raise ValidationError({"equipos": "Uno de los equipos no pertenece al aprendiz."})
-                if eq.estado != Equipo.Estado.APROBADO:
-                    raise ValidationError({"equipos": "Uno de los equipos no está aprobado."})
-            acceso.equipos.set(equipos_enviados)
+        if equipos_enviados:
+            acceso.equipos.set(list(equipos_enviados))
 
-        if tipo == Acceso.Tipo.SALIDA and equipos_a_setear:
-            for eq in equipos_a_setear:
-                if eq.propietario_id != acceso.usuario_id:
-                    raise ValidationError({"equipos": "Uno de los equipos no pertenece al aprendiz."})
-                if eq.estado != Equipo.Estado.APROBADO:
-                    raise ValidationError({"equipos": "Uno de los equipos no está aprobado."})
-            acceso.equipos.set(equipos_a_setear)
-
-        return Response(
-            {"permitido": True, "motivo": None, "acceso": AccesoSerializer(acceso).data},
-            status=status.HTTP_201_CREATED,
-        )
+        return Response({"permitido": True, "motivo": None, "acceso": AccesoSerializer(acceso).data}, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"], url_path="validar_documento")
     def validar_documento(self, request):
@@ -691,22 +712,21 @@ class AccesoViewSet(viewsets.ModelViewSet):
             return Response({"permitido": False, "motivo": "El documento no pertenece a un aprendiz."}, status=status.HTTP_400_BAD_REQUEST)
 
         if getattr(aprendiz, "estado", None) == Usuario.Estado.BLOQUEADO:
-            return Response({"permitido": False, "motivo": "Aprendiz bloqueado."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"permitido": False, "motivo": "El aprendiz está bloqueado."}, status=status.HTTP_403_FORBIDDEN)
 
-        equipos = Equipo.objects.filter(propietario=aprendiz, estado=Equipo.Estado.APROBADO).order_by("id")
+        ultimo = Acceso.objects.filter(usuario=aprendiz).order_by("-fecha").first()
+        estado = "dentro" if (ultimo and ultimo.tipo == Acceso.Tipo.INGRESO) else "fuera"
+
+        equipos_aprobados = Equipo.objects.filter(propietario=aprendiz, estado=Equipo.Estado.APROBADO).order_by("-creado_en")
 
         return Response(
             {
                 "permitido": True,
-                "aprendiz": {
-                    "id": aprendiz.id,
-                    "username": aprendiz.username,
-                    "first_name": aprendiz.first_name,
-                    "last_name": aprendiz.last_name,
-                    "documento": aprendiz.documento,
-                },
-                "equipos_aprobados": [{"id": e.id, "serial": e.serial, "marca": e.marca, "modelo": e.modelo} for e in equipos],
-                "turno": {"id": turno.id, "sede": turno.sede, "jornada": turno.jornada},
+                "motivo": None,
+                "estado": estado,
+                "aprendiz": UsuarioSerializer(aprendiz).data,
+                "equipos": EquipoSerializer(equipos_aprobados, many=True).data,
+                "turno": TurnoSerializer(turno).data,
             },
             status=status.HTTP_200_OK,
         )
@@ -718,24 +738,18 @@ class AccesoViewSet(viewsets.ModelViewSet):
 
         documento = s.validated_data["documento"]
         tipo = s.validated_data["tipo"]
-        equipos_ids = s.validated_data.get("equipos", [])
+        equipos = s.validated_data.get("equipos", [])
 
         turno = obtener_turno_activo(request.user)
         if not turno:
-            return Response(
-                {"permitido": False, "motivo": "Debes iniciar turno antes de registrar accesos."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"permitido": False, "motivo": "Debes iniciar turno antes de registrar accesos."}, status=status.HTTP_400_BAD_REQUEST)
 
         aprendiz = Usuario.objects.filter(documento=documento).first()
         if not aprendiz:
             return Response({"permitido": False, "motivo": "Documento no registrado."}, status=status.HTTP_404_NOT_FOUND)
 
-        if aprendiz.rol != Usuario.Rol.APRENDIZ:
+        if getattr(aprendiz, "rol", None) != Usuario.Rol.APRENDIZ:
             return Response({"permitido": False, "motivo": "El documento no pertenece a un aprendiz."}, status=status.HTTP_400_BAD_REQUEST)
-
-        if aprendiz.estado == Usuario.Estado.BLOQUEADO:
-            return Response({"permitido": False, "motivo": "Aprendiz bloqueado."}, status=status.HTTP_403_FORBIDDEN)
 
         ultimo = Acceso.objects.filter(usuario=aprendiz).order_by("-fecha").first()
 
@@ -745,136 +759,57 @@ class AccesoViewSet(viewsets.ModelViewSet):
         if ultimo is not None and ultimo.tipo == tipo:
             return Response({"permitido": False, "motivo": f"Doble {tipo}."}, status=status.HTTP_400_BAD_REQUEST)
 
-        equipos_a_setear = []
+        # Equipos
+        if tipo == Acceso.Tipo.INGRESO and equipos:
+            self._validar_equipos_ingreso(aprendiz, list(equipos))
 
         if tipo == Acceso.Tipo.SALIDA:
             if not ultimo or ultimo.tipo != Acceso.Tipo.INGRESO:
-                return Response(
-                    {"permitido": False, "motivo": "Salida inválida: el último registro no es un ingreso."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            equipos_ingreso_ids = list(ultimo.equipos.values_list("id", flat=True))
-
-            if equipos_ingreso_ids and not equipos_ids:
-                return Response(
-                    {"permitido": False, "motivo": "Salida inválida: debes seleccionar los mismos equipos del último ingreso."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if (not equipos_ingreso_ids) and equipos_ids:
-                return Response(
-                    {"permitido": False, "motivo": "Salida inválida: el último ingreso no tenía equipos."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            if equipos_ids:
-                if sorted(equipos_ingreso_ids) != sorted(equipos_ids):
-                    return Response(
-                        {"permitido": False, "motivo": "Los equipos en la salida deben coincidir exactamente con los del último ingreso."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                equipos_a_setear = list(Equipo.objects.filter(id__in=equipos_ids))
+                return Response({"permitido": False, "motivo": "Salida inválida: el último registro no es un ingreso."}, status=status.HTTP_400_BAD_REQUEST)
+            # Validación estricta de equipos
+            self._validar_salida_equipos_vs_ultimo_ingreso(ultimo, list(equipos))
 
         acceso = Acceso.objects.create(
             usuario=aprendiz,
             tipo=tipo,
-            registrado_por=request.user,
-            turno=turno,
+            fecha=timezone.now(),
             sede=turno.sede,
+            turno=turno,
+            registrado_por=request.user,
         )
+        if equipos:
+            acceso.equipos.set(list(equipos))
 
-        if tipo == Acceso.Tipo.INGRESO and equipos_ids:
-            equipos = list(Equipo.objects.filter(id__in=equipos_ids))
-            if len(equipos) != len(set(equipos_ids)):
-                return Response({"permitido": False, "motivo": "Alguno de los equipos no existe."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"permitido": True, "motivo": None, "acceso": AccesoSerializer(acceso).data}, status=status.HTTP_201_CREATED)
 
-            for eq in equipos:
-                if eq.propietario_id != aprendiz.id:
-                    return Response({"permitido": False, "motivo": "Equipo no pertenece al aprendiz."}, status=status.HTTP_400_BAD_REQUEST)
-                if eq.estado != Equipo.Estado.APROBADO:
-                    return Response({"permitido": False, "motivo": "Equipo no aprobado."}, status=status.HTTP_400_BAD_REQUEST)
+    @action(detail=False, methods=["get"], url_path="stats")
+    def stats(self, request):
+        turno = obtener_turno_activo(request.user)
+        if not turno:
+            return Response({"permitido": False, "motivo": "No tienes turno activo.", "stats": None}, status=status.HTTP_400_BAD_REQUEST)
 
-            acceso.equipos.set(equipos)
-
-        if tipo == Acceso.Tipo.SALIDA and equipos_a_setear:
-            for eq in equipos_a_setear:
-                if eq.propietario_id != aprendiz.id:
-                    return Response({"permitido": False, "motivo": "Equipo no pertenece al aprendiz."}, status=status.HTTP_400_BAD_REQUEST)
-                if eq.estado != Equipo.Estado.APROBADO:
-                    return Response({"permitido": False, "motivo": "Equipo no aprobado."}, status=status.HTTP_400_BAD_REQUEST)
-            acceso.equipos.set(equipos_a_setear)
+        qs = Acceso.objects.filter(turno=turno)
+        ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
+        salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
 
         return Response(
             {
                 "permitido": True,
                 "motivo": None,
-                "acceso": {
-                    "id": acceso.id,
-                    "fecha": acceso.fecha,
-                    "tipo": acceso.tipo,
-                    "sede": acceso.sede,
-                    "equipos": [{"id": e.id, "serial": e.serial} for e in acceso.equipos.all()],
-                },
-                "aprendiz": {
-                    "id": aprendiz.id,
-                    "username": aprendiz.username,
-                    "first_name": aprendiz.first_name,
-                    "last_name": aprendiz.last_name,
-                    "documento": aprendiz.documento,
-                },
                 "turno": {"id": turno.id, "sede": turno.sede, "jornada": turno.jornada},
+                "stats": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas},
             },
-            status=status.HTTP_201_CREATED,
+            status=status.HTTP_200_OK,
         )
 
-    @action(detail=False, methods=["get"], url_path="stats")
-    def stats(self, request):
-        user = request.user
-        rol = getattr(user, "rol", None)
-
-        if rol == "guarda":
-            turno = obtener_turno_activo(user)
-            if not turno:
-                return Response(
-                    {"permitido": False, "motivo": "No tienes turno activo.", "stats": None},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            qs = Acceso.objects.filter(turno=turno)
-            ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
-            salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
-
-            return Response(
-                {
-                    "permitido": True,
-                    "motivo": None,
-                    "turno": {"id": turno.id, "sede": turno.sede, "jornada": turno.jornada},
-                    "stats": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas},
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        if rol == "admin":
-            qs = self.get_queryset()
-            ingresos = qs.filter(tipo=Acceso.Tipo.INGRESO).count()
-            salidas = qs.filter(tipo=Acceso.Tipo.SALIDA).count()
-            return Response(
-                {"permitido": True, "motivo": None, "stats": {"ingresos": ingresos, "salidas": salidas, "total": ingresos + salidas}},
-                status=status.HTTP_200_OK,
-            )
-
-        return Response({"permitido": False, "motivo": "No autorizado."}, status=status.HTTP_403_FORBIDDEN)
-
+    # ===== Aprendiz endpoints (para después, pero no estorban) =====
     @action(detail=False, methods=["get"], url_path="mis_accesos")
     def mis_accesos(self, request):
-        qs = Acceso.objects.filter(usuario=request.user).order_by("-fecha")
+        qs = Acceso.objects.filter(usuario=request.user).order_by("-fecha")[:100]
         return Response(AccesoSerializer(qs, many=True).data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=["get"], url_path="estado")
     def estado(self, request):
         ultimo = Acceso.objects.filter(usuario=request.user).order_by("-fecha").first()
-        if not ultimo:
-            return Response({"estado": "SIN_REGISTROS", "ultimo_tipo": None, "ultima_fecha": None}, status=status.HTTP_200_OK)
-        estado = "DENTRO" if ultimo.tipo == Acceso.Tipo.INGRESO else "FUERA"
-        return Response({"estado": estado, "ultimo_tipo": ultimo.tipo, "ultima_fecha": ultimo.fecha}, status=status.HTTP_200_OK)
+        estado = "dentro" if (ultimo and ultimo.tipo == Acceso.Tipo.INGRESO) else "fuera"
+        return Response({"estado": estado}, status=status.HTTP_200_OK)
