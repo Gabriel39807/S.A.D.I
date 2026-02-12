@@ -36,7 +36,18 @@ El sistema permite registrar **entradas, salidas, equipos tecnológicos, turnos 
 
 # 🏗️ Arquitectura del Proyecto
 
-
+```text
+SADI/
+│
+├── services/
+│ └── api/ # Backend Django + DRF
+│
+├── apps/
+│ ├── web/ # Frontend Web (React)
+│ └── mobile-rn/ # App móvil (React Native + Expo)
+│
+└── README.md
+```
 
 
 ---
@@ -156,3 +167,111 @@ python -m venv .venv
 pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
+```
+
+## 🌐 Frontend Web
+
+```bash
+cd apps/web
+npm install
+npm start
+```
+
+## 📱 App Móvil (Expo)
+
+```bash
+cd apps/mobile-rn
+npm install
+npx expo start
+```
+
+## 🔑 Variables de Entorno (.env)
+
+Ejemplo backend
+
+```bash
+DEBUG=True
+SECRET_KEY=your_secret_key
+DATABASE_NAME=sadi
+DATABASE_USER=postgres
+DATABASE_PASSWORD=******
+DATABASE_HOST=localhost
+DATABASE_PORT=5433
+```
+
+---
+
+# 📸 Módulos del Sistema
+
+## 🔐 Autenticación
+
+- Login Administrador  
+- Login Aprendiz  
+- Login Guardia  
+- Recuperación de contraseña  
+- Verificación OTP  
+- Cambio de contraseña  
+
+---
+
+## 👮 Panel de Seguridad
+
+- Escanear QR  
+- Digitar documento  
+- Checklist de equipos  
+- Confirmación de acceso  
+- Alertas  
+
+---
+
+## 👨‍🎓 Panel Aprendiz
+
+- Mis Equipos  
+- Historial  
+- Perfil  
+- Soporte  
+- Notificaciones  
+
+---
+
+# 🛡️ Seguridad Implementada
+
+- JWT Authentication  
+- Protección contra intentos fallidos  
+- Bloqueo temporal de cuenta  
+- Validación de contraseña fuerte  
+- Control de acceso por rol  
+- Verificación de turno activo  
+
+---
+
+# 📌 Estado Actual del Proyecto
+
+✔ Backend funcional  
+✔ Frontend Web funcional  
+✔ App móvil funcional  
+✔ Control de accesos operativo  
+✔ Registro de equipos operativo  
+✔ Gestión de turnos implementada  
+
+🔄 Mejoras en UI/UX  
+🔄 Optimización de rendimiento  
+🔄 Preparación para producción  
+
+---
+
+# 📍 Centro de Formación
+
+**SENA - Tunja**  
+Centro de Gestión Administrativa y Fortalecimiento Empresarial (CEGAFE)  
+Año: 2026 
+
+---
+
+# 👨‍💻 Autor
+
+**Gabriel Santiago Pico Santos**  
+**Juan Sebastian Mora Benitez**
+
+Proyecto académico SENA 2026  
+Análisis y Desarrollo de Software  
