@@ -1,51 +1,158 @@
-# 🛡️ SADI
-### Sistema de Acceso Digital Institucional
+# 🛡️ S.A.D.I - Sistema de Administración y Control de Ingresos  
+
 
 <p align="center">
-  <b>Control de accesos · Turnos de guardas · Aprendices · Equipos · QR/Barcode · OTP</b>
-</p>
-
-<p align="center">
-  <img alt="Django" src="https://img.shields.io/badge/Django-6.x-0C4B33?logo=django&logoColor=white">
-  <img alt="DRF" src="https://img.shields.io/badge/DRF-API-red">
-  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-DB-316192?logo=postgresql&logoColor=white">
-  <img alt="JWT" src="https://img.shields.io/badge/Auth-JWT-6f42c1">
-  <img alt="Next.js" src="https://img.shields.io/badge/Next.js-Web-000000?logo=nextdotjs&logoColor=white">
-  <img alt="React Native" src="https://img.shields.io/badge/React%20Native-Mobile-61DAFB?logo=react&logoColor=000">
+  <img src="https://img.shields.io/badge/Estado-En%20Desarrollo-green">
+  <img src="https://img.shields.io/badge/Backend-Django-blue">
+  <img src="https://img.shields.io/badge/Frontend-React-61DAFB">
+  <img src="https://img.shields.io/badge/Mobile-React%20Native-purple">
+  <img src="https://img.shields.io/badge/License-Academic-orange">
 </p>
 
 ---
 
-## ✨ ¿Qué es SADI?
+## 📌 Descripción del Proyecto
 
-**SADI** es una plataforma para **controlar ingresos y salidas** en sedes institucionales, con:
-- **Turnos** de guardas (inicio/finalización)
-- **Registro de accesos** (ingreso/salida) con validaciones anti-duplicados
-- **Gestión de aprendices** y **equipos**
-- **Credenciales** mediante **QR** (descargable) y lector compatible con **código de barras**
-- **Recuperación de contraseña** por **OTP** (PIN)
+**S.A.D.I (Sistema de Administración y Control de Ingresos)** es una plataforma integral desarrollada para el **SENA Tunja - CEGAFE**, que permite gestionar y controlar el acceso de:
 
----
+- 👨‍🎓 Aprendices
+- 👮 Personal de Seguridad
+- 🛠️ Administradores
+- 💻 Equipos tecnológicos
 
-## 🧭 Tabla de Contenido
-- [Arquitectura](#-arquitectura)
-- [Roles](#-roles)
-- [Reglas de negocio clave](#-reglas-de-negocio-clave)
-- [Instalación backend](#-instalación-backend)
-- [Endpoints principales](#-endpoints-principales)
-- [Auditoría y saneo de turnos](#-auditoría-y-saneo-de-turnos)
-- [Producción](#-producción)
-- [Autor](#-autor)
+El sistema permite registrar **entradas, salidas, equipos tecnológicos, turnos del personal de seguridad y alertas en tiempo real**, garantizando seguridad, trazabilidad y control institucional.
 
 ---
 
-## 🏗️ Arquitectura
+# 🎯 Objetivos
 
-```text
-SADI/
-├─ services/
-│  └─ api/                  Backend (Django + DRF)
-├─ apps/
-│  ├─ web/                  Panel administrativo (Next.js)
-│  └─ mobile/               App móvil (React Native)
-└─ README.md
+- Controlar el ingreso y salida de personas.
+- Registrar equipos tecnológicos.
+- Gestionar turnos del personal de seguridad.
+- Implementar autenticación segura con recuperación de contraseña.
+- Mejorar la trazabilidad y seguridad del centro de formación.
+
+---
+
+# 🏗️ Arquitectura del Proyecto
+
+
+
+
+---
+
+# 👥 Roles del Sistema
+
+## 🛠️ Administrador
+- Gestión de usuarios
+- Gestión de equipos
+- Gestión de turnos
+- Control de accesos
+- Visualización de estadísticas
+- Panel administrativo avanzado
+
+---
+
+## 👮 Personal de Seguridad
+- Inicio y cierre de turno
+- Escaneo QR (persona o equipo)
+- Registro de entrada/salida
+- Visualización de alertas
+- Historial de accesos
+- Validación de carnet
+
+---
+
+## 👨‍🎓 Aprendiz
+- Registro de equipos tecnológicos
+- Consulta de historial de ingresos/salidas
+- Perfil personal
+- Cambio de contraseña
+- Notificaciones
+- Soporte y ayuda
+
+---
+
+# 🔐 Sistema de Autenticación
+
+- Inicio de sesión por rol
+- Bloqueo por intentos fallidos
+- Recuperación de contraseña por código OTP (5 dígitos)
+- Cambio obligatorio de contraseña inicial
+- Validación de seguridad:
+  - Mínimo 8 caracteres
+  - 1 mayúscula
+  - 1 número
+
+---
+
+# 💻 Tecnologías Utilizadas
+
+## 🔙 Backend
+- Python 3
+- Django
+- Django REST Framework
+- JWT Authentication
+- PostgreSQL
+- SQLite (desarrollo)
+
+## 🌐 Frontend Web
+- React
+- TailwindCSS
+- Axios
+- React Router
+
+## 📱 Aplicación Móvil
+- React Native
+- Expo
+- Expo Camera (QR Scanner)
+- AsyncStorage
+
+## ⚙️ DevOps & Herramientas
+- Git & GitHub
+- Postman
+- VSCode / Cursor
+- Figma (UI/UX)
+- Lovable (Diseño UI)
+
+---
+
+# 📊 Funcionalidades Principales
+
+### ✅ Control de Acceso
+- Escaneo QR
+- Validación de carnet
+- Registro manual por documento
+- Confirmación visual de acceso autorizado/denegado
+
+### 💻 Gestión de Equipos
+- Registro de equipo
+- Edición de información
+- Eliminación
+- Estado (Dentro/Fuera del SENA)
+- Foto opcional del serial
+
+### 🕒 Gestión de Turnos
+- Turno Mañana / Tarde / Noche
+- Cierre automático de turno
+- Registro de actividad del guardia
+
+### 📈 Paneles con Estadísticas
+- Equipos registrados
+- Personas dentro
+- Alertas recientes
+- Registros recientes
+
+---
+
+# 🚀 Instalación del Proyecto
+
+## 🔙 Backend (Django)
+
+```bash
+cd services/api
+python -m venv .venv
+.venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
