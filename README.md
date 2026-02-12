@@ -1,5 +1,5 @@
 # 🛡️ SADI
-### Sistema de Administración de Ingresos
+### Sistema de Acceso Digital Institucional
 
 <p align="center">
   <b>Control de accesos · Turnos de guardas · Aprendices · Equipos · QR/Barcode · OTP</b>
