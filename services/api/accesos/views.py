@@ -35,11 +35,33 @@ from .serializers import (
 # Helpers
 # =========================
 def obtener_turno_activo(user):
-    return (
-        Turno.objects.filter(guarda=user, activo=True, fin__isnull=True)
-        .order_by("-inicio")
-        .first()
-    )
+    """
+    Devuelve el turno activo coherente del guarda.
+
+    Además, auto-corrige inconsistencias comunes que pueden existir en BD:
+    - turno con activo=True pero fin != NULL  -> lo marca activo=False
+    """
+    qs = Turno.objects.filter(guarda=user, activo=True).order_by("-inicio")
+
+    # Revisa unos pocos por seguridad (si hay datos sucios)
+    for t in qs[:5]:
+        if t.fin is None:
+            return t
+
+        # Inconsistencia: activo=True pero fin existe -> corregir
+        t.activo = False
+        t.save(update_fields=["activo"])
+
+    return None
+
+
+def _safe_fin(now, inicio):
+    """
+    Garantiza que fin nunca sea menor que inicio.
+    """
+    if inicio and now < inicio:
+        return inicio
+    return now
 
 
 # --- Helpers OTP ---
@@ -449,7 +471,11 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
         turno_activo = obtener_turno_activo(request.user)
         if turno_activo:
             return Response(
-                {"permitido": False, "motivo": "Ya tienes un turno activo.", "turno": TurnoSerializer(turno_activo).data},
+                {
+                    "permitido": False,
+                    "motivo": "Ya tienes un turno activo.",
+                    "turno": TurnoSerializer(turno_activo).data,
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -459,8 +485,12 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
             jornada=s.validated_data["jornada"],
             inicio=timezone.now(),
             activo=True,
+            fin=None,
         )
-        return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_201_CREATED)
+        return Response(
+            {"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data},
+            status=status.HTTP_201_CREATED,
+        )
 
     @action(detail=False, methods=["post"], url_path="finalizar")
     def finalizar(self, request):
@@ -471,11 +501,15 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        now = timezone.now()
         turno.activo = False
-        turno.fin = timezone.now()
+        turno.fin = _safe_fin(now, turno.inicio)
         turno.save(update_fields=["activo", "fin"])
 
-        return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_200_OK)
+        return Response(
+            {"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["get"], url_path="actual")
     def actual(self, request):
@@ -487,18 +521,29 @@ class TurnoViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=True, methods=["post"], url_path="finalizar_admin")
     def finalizar_admin(self, request, pk=None):
         turno = self.get_object()
-        if not turno.activo:
+
+        # Si ya está finalizado, informamos
+        if not turno.activo and turno.fin is not None:
             return Response(
-                {"permitido": False, "motivo": "El turno ya estaba finalizado.", "turno": TurnoSerializer(turno).data},
+                {
+                    "permitido": False,
+                    "motivo": "El turno ya estaba finalizado.",
+                    "turno": TurnoSerializer(turno).data,
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        now = timezone.now()
+
+        # ✅ SIEMPRE se sobreescribe fin al cerrar por admin
         turno.activo = False
-        if not turno.fin:
-            turno.fin = timezone.now()
+        turno.fin = _safe_fin(now, turno.inicio)
         turno.save(update_fields=["activo", "fin"])
 
-        return Response({"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data}, status=status.HTTP_200_OK)
+        return Response(
+            {"permitido": True, "motivo": None, "turno": TurnoSerializer(turno).data},
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["get"], url_path="resumen")
     def resumen(self, request, pk=None):
@@ -630,7 +675,7 @@ class AccesoViewSet(viewsets.ModelViewSet):
             raise ValidationError({"equipos": "Salida inválida: el último ingreso no tenía equipos."})
 
         if equipos_enviados and ingreso_ids != enviados_ids:
-            raise ValidationError({"equipos": "Los equipos en la salida deben coincidir exactamente con los del último ingreso."})
+            raise ValidationError({"equipos": "Los equipos en la salida deben coincidir exactamente con los de l último ingreso."})
 
     def create(self, request, *args, **kwargs):
         request_user = request.user

@@ -1,6 +1,8 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
+from django.db.models import Q, F
 
 
 class Usuario(AbstractUser):
@@ -12,17 +14,17 @@ class Usuario(AbstractUser):
     rol = models.CharField(max_length=20, choices=Rol.choices, default=Rol.APRENDIZ)
 
     SEDE_CHOICES = [
-    ("CEGAFE", "CEGAFE"),
-    ("SANTA_CLARA", "SANTA CLARA"),
-    ("ITEDRIS", "ITEDRIS"),
-    ("GASTRONOMIA", "GASTRONOMIA"),
+        ("CEGAFE", "CEGAFE"),
+        ("SANTA_CLARA", "SANTA CLARA"),
+        ("ITEDRIS", "ITEDRIS"),
+        ("GASTRONOMIA", "GASTRONOMIA"),
     ]
 
     sede_principal = models.CharField(
-    max_length=20,
-    choices=SEDE_CHOICES,
-    null=True,
-    blank=True
+        max_length=20,
+        choices=SEDE_CHOICES,
+        null=True,
+        blank=True
     )
 
     programa_formacion = models.CharField(max_length=100, null=True, blank=True)
@@ -73,13 +75,29 @@ class Turno(models.Model):
         TARDE = "TARDE", "Tarde"
         NOCHE = "NOCHE", "Noche"
 
-    guarda = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name="turnos")
+    guarda = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="turnos")
     sede = models.CharField(max_length=30, choices=Sede.choices)
     jornada = models.CharField(max_length=20, choices=Jornada.choices)
-    inicio = models.DateTimeField(auto_now_add=True)
+
+    # ✅ más controlable que auto_now_add
+    inicio = models.DateTimeField(default=timezone.now)
     fin = models.DateTimeField(null=True, blank=True)
+
     activo = models.BooleanField(default=True)
 
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(fin__isnull=True) | Q(fin__gte=F("inicio")),
+                name="turno_fin_gte_inicio_or_null",
+            ),
+            models.CheckConstraint(
+                condition=(Q(activo=True, fin__isnull=True) | Q(activo=False, fin__isnull=False)),
+                name="turno_activo_fin_coherente",
+            ),
+        ]
+
+        
     def __str__(self):
         return f"Turno {self.guarda.username} - {self.sede} - {self.jornada} ({'activo' if self.activo else 'finalizado'})"
 
@@ -104,7 +122,6 @@ class Acceso(models.Model):
 
     def __str__(self):
         return f"{self.usuario.username} - {self.tipo} - {self.fecha}"
-
 
 
 class Notificacion(models.Model):
